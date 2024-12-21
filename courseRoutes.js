@@ -483,66 +483,149 @@ postRoutes.route("/analytics/visits/:tutorId").get(verifyToken, async (req, res)
     }
 });
 
-//comments
-postRoutes.route("/comments").post(verifyToken, async (req, res) => {
-    const { courseId, commentText, parentId } = req.body;
-    const comment = await Comment.create({
-      courseId,
-      userId: req.user._id,
-      commentText,
-      parentId: parentId || null,
-      createdAt: new Date()
-    });
+// //comments
+// postRoutes.route("/comments").post(verifyToken, async (req, res) => {
+//     const { courseId, commentText, parentId } = req.body;
+//     const comment = await Comment.create({
+//       courseId,
+//       userId: req.user._id,
+//       commentText,
+//       parentId: parentId || null,
+//       createdAt: new Date()
+//     });
     
-    // Notify the teacher when a new comment is added
-    const teacher = await getTeacherByCourseId(courseId);  // Implement this helper
-    await Notification.create({
-      userId: teacher._id,
-      courseId,
-      commentId: comment._id,
-      type: 'comment',
-      isRead: false,
-      createdAt: new Date()
-    });
+//     // Notify the teacher when a new comment is added
+//     const teacher = await getTeacherByCourseId(courseId);  // Implement this helper
+//     await Notification.create({
+//       userId: teacher._id,
+//       courseId,
+//       commentId: comment._id,
+//       type: 'comment',
+//       isRead: false,
+//       createdAt: new Date()
+//     });
   
-    res.json(comment);
-  });
+//     res.json(comment);
+//   });
   
-  postRoutes.route("/comments/reply").post(verifyToken, async (req, res) => {
-    const { courseId, commentText, parentId } = req.body;
-    const reply = await Comment.create({
-      courseId,
-      userId: req.user._id,
-      commentText,
-      parentId,
-      createdAt: new Date()
-    });
+//   postRoutes.route("/comments/reply").post(verifyToken, async (req, res) => {
+//     const { courseId, commentText, parentId } = req.body;
+//     const reply = await Comment.create({
+//       courseId,
+//       userId: req.user._id,
+//       commentText,
+//       parentId,
+//       createdAt: new Date()
+//     });
   
-    // Notify the student who asked the question
-    const parentComment = await Comment.findById(parentId);
-    await Notification.create({
-      userId: parentComment.userId,
-      courseId,
-      commentId: reply._id,
-      type: 'reply',
-      isRead: false,
-      createdAt: new Date()
-    });
+//     // Notify the student who asked the question
+//     const parentComment = await Comment.findById(parentId);
+//     await Notification.create({
+//       userId: parentComment.userId,
+//       courseId,
+//       commentId: reply._id,
+//       type: 'reply',
+//       isRead: false,
+//       createdAt: new Date()
+//     });
   
-    res.json(reply);
-  });
+//     res.json(reply);
+//   });
   
-//get notification
-postRoutes.route("/notifications").get(verifyToken, async (req, res) => {
-    const notifications = await Notification.find({ userId: req.user._id, isRead: false });
-    res.json(notifications);
-  });
+// //get notification
+// postRoutes.route("/notifications").get(verifyToken, async (req, res) => {
+//     const notifications = await Notification.find({ userId: req.user._id, isRead: false });
+//     res.json(notifications);
+//   });
   
-  //mark read notifaction
-  postRoutes.route("/notifications/:id/read").put(verifyToken, async (req, res) => {
-    await Notification.findByIdAndUpdate(req.params.id, { isRead: true });
-    res.sendStatus(200);
-  });
+//   //mark read notifaction
+//   postRoutes.route("/notifications/:id/read").put(verifyToken, async (req, res) => {
+//     await Notification.findByIdAndUpdate(req.params.id, { isRead: true });
+//     res.sendStatus(200);
+//   });
   
  
+
+// Post a comment
+postRoutes.route("/comment").post(verifyToken, async (req, res) => {
+    const db = database.getDb();
+
+    try {
+        const { courseId, text } = req.body;
+
+        if (!courseId || !text) {
+            return res.status(400).json({ error: "Course ID and comment text are required." });
+        }
+
+        const newComment = {
+            courseId: new ObjectId(courseId), // Reference to the course
+            user: req.user?.name, // Extracted from the token
+            text,
+            createdAt: new Date()
+        };
+
+        const result = await db.collection("comments").insertOne(newComment);
+
+        res.status(201).json({ message: "Comment added successfully!", comment: newComment });
+    } catch (error) {
+        console.error("Error posting comment:", error);
+        res.status(500).json({ error: "Failed to add comment." });
+    }
+});
+
+// Get all comments for a specific course
+postRoutes.route("/comment/:courseId").get(async (req, res) => {
+    const db = database.getDb();
+    const { courseId } = req.params;
+
+    try {
+        const comments = await db
+            .collection("comments")
+            .find({ courseId: new ObjectId(courseId) }) // Filter comments by courseId
+            .sort({ createdAt: -1 }) // Sort by newest first
+            .toArray();
+
+        res.status(200).json({ comments });
+    } catch (error) {
+        console.error("Error fetching comments:", error);
+        res.status(500).json({ error: "Failed to fetch comments." });
+    }
+});
+
+
+// Reply to a comment
+postRoutes.route("/comment/reply/:commentId").post(verifyToken, async (req, res) => {
+    const db = database.getDb();
+    const { commentId } = req.params;
+    const { text } = req.body;
+
+    try {
+        if (!text) {
+            return res.status(400).json({ error: "Reply text is required." });
+        }
+
+        // Create the reply object
+        const reply = {
+            user: req.user?.name, // Extract user name from the token
+            text,
+            createdAt: new Date()
+        };
+
+        // Update the comment document by pushing the reply into the replies array
+        const result = await db.collection("comments").updateOne(
+            { _id: new ObjectId(commentId) },
+            { $push: { replies: reply } }
+        );
+
+        if (result.modifiedCount === 0) {
+            return res.status(404).json({ error: "Comment not found." });
+        }
+
+        res.status(200).json({ message: "Reply added successfully!", reply });
+    } catch (error) {
+        console.error("Error replying to comment:", error);
+        res.status(500).json({ error: "Failed to reply to the comment." });
+    }
+});
+
 module.exports = postRoutes
