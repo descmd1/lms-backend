@@ -9,7 +9,7 @@ const multer = require('multer')
 
 
 const app = express()
-const PORT = 5001
+const PORT = process.env.PORT || 5001;
 
 
 const allowedOrigins = ["http://localhost:3000", "https://lms-xfl6.vercel.app"];
@@ -32,3 +32,7 @@ app.listen(PORT, () => {
     connect.connectServer()
     console.log(`Server is running on port ${PORT}`)
 })
+
+app.listen(process.env.PORT || 5001, () => {
+  console.log("Server is running on port", process.env.PORT || 5001);
+});
