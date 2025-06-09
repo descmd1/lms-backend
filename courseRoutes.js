@@ -95,6 +95,7 @@ postRoutes.route("/course").post(
                 // Ensure chapters is parsed correctly
                 chapters = Array.isArray(request.body.chapters) ? request.body.chapters : JSON.parse(request.body.chapters);
                 console.log("Parsed chapters:", chapters); 
+                
 
 // Upload videos for each chapter if they exist
 for (let index = 0; index < chapters.length; index++) {
@@ -118,6 +119,8 @@ for (let index = 0; index < chapters.length; index++) {
     }
 }
             }
+            console.log("Chapters after parsing:", chapters);
+            console.log("Chapter videos:", chapterVideos);
             // Create the course object including chapters and their videos
             let mongoObject = {
                 title: request.body.title,
@@ -377,42 +380,6 @@ const ongoingCourses = await db.collection("courses").find({ _id: { $in: courseI
     }
 });
 
-// // Fetch completed courses for a user
-// router.get('/completedcourses', verifyToken, async (req, res) => {
-//     let db = database.getDb();
-//     const userId = req.user.id;
-
-//     try {
-//         const completedCourses = await db.collection("enrollments").find({ userId: userId, status: 'completed' }).toArray();
-//         res.json(completedCourses);
-//     } catch (error) {
-//         console.error('Error fetching completed courses:', error);
-//         return res.status(500).json({ error: 'Failed to fetch completed courses' });
-//     }
-// });
-
-// postRoutes.route("/completedcourses").get(verifyToken, async (request, response) => {
-//     let db = database.getDb();
-//     const { courseId } = request.body;
-//     const userId = request.user._id;
-
-//     try {
-//         const result = await db.collection("enrollments").updateOne(
-//             { userId: userId, courseId: courseId },
-//             { $set: { status: 'completed' } }
-//         );
-
-//         if (result.modifiedCount > 0) {
-//             response.json({ message: 'Course marked as completed' });
-//         } else {
-//             response.status(404).json({ error: 'Enrollment not found or already completed' });
-//         }
-//     } catch (error) {
-//         console.error('Error completing course:', error);
-//         return response.status(500).json({ error: 'Failed to complete course' });
-//     }
-// });
-
 postRoutes.route("/completedcourses").get(verifyToken, async (request, response) => {
     let db = database.getDb();
     const userId = request.user._id;
@@ -435,8 +402,6 @@ postRoutes.route("/completedcourses").get(verifyToken, async (request, response)
         return response.status(500).json({ error: 'Failed to fetch completed courses' });
     }
 });
-
-
 
 
 postRoutes.route("/analytics/visits/:tutorId").get(verifyToken, async (req, res) => {
@@ -482,69 +447,6 @@ postRoutes.route("/analytics/visits/:tutorId").get(verifyToken, async (req, res)
         res.status(500).json({ message: "Error fetching analytics", error: error.message });
     }
 });
-
-// //comments
-// postRoutes.route("/comments").post(verifyToken, async (req, res) => {
-//     const { courseId, commentText, parentId } = req.body;
-//     const comment = await Comment.create({
-//       courseId,
-//       userId: req.user._id,
-//       commentText,
-//       parentId: parentId || null,
-//       createdAt: new Date()
-//     });
-    
-//     // Notify the teacher when a new comment is added
-//     const teacher = await getTeacherByCourseId(courseId);  // Implement this helper
-//     await Notification.create({
-//       userId: teacher._id,
-//       courseId,
-//       commentId: comment._id,
-//       type: 'comment',
-//       isRead: false,
-//       createdAt: new Date()
-//     });
-  
-//     res.json(comment);
-//   });
-  
-//   postRoutes.route("/comments/reply").post(verifyToken, async (req, res) => {
-//     const { courseId, commentText, parentId } = req.body;
-//     const reply = await Comment.create({
-//       courseId,
-//       userId: req.user._id,
-//       commentText,
-//       parentId,
-//       createdAt: new Date()
-//     });
-  
-//     // Notify the student who asked the question
-//     const parentComment = await Comment.findById(parentId);
-//     await Notification.create({
-//       userId: parentComment.userId,
-//       courseId,
-//       commentId: reply._id,
-//       type: 'reply',
-//       isRead: false,
-//       createdAt: new Date()
-//     });
-  
-//     res.json(reply);
-//   });
-  
-// //get notification
-// postRoutes.route("/notifications").get(verifyToken, async (req, res) => {
-//     const notifications = await Notification.find({ userId: req.user._id, isRead: false });
-//     res.json(notifications);
-//   });
-  
-//   //mark read notifaction
-//   postRoutes.route("/notifications/:id/read").put(verifyToken, async (req, res) => {
-//     await Notification.findByIdAndUpdate(req.params.id, { isRead: true });
-//     res.sendStatus(200);
-//   });
-  
- 
 
 // Post a comment
 postRoutes.route("/comment").post(verifyToken, async (req, res) => {
