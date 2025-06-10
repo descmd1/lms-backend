@@ -51,10 +51,11 @@ const multer = require('multer');
 const app = express();
 const PORT = process.env.PORT || 5001;
 
-const allowedOrigins = ["http://localhost:3000", "https://lms-xfl6.vercel.app"];
+const allowedOrigins = ["https://lms-xfl6.vercel.app"];
 
 // Enhanced CORS configuration
 app.use(cors({
+  // origin:"http://localhost:3000",
   origin: function (origin, callback) {
     // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
