@@ -26,7 +26,7 @@ router.post('/buycourse', async (req, res) => {
             {
                 email,
                 amount: amount * 100, // Amount should be in kobo
-                callback_url: `https://lms-api-pr4i.onrender.com/verifypayment/${courseId}`, // Redirect after payment
+                callback_url: `https://lms-xfl6.vercel.app/verifypayment/${courseId}`, // Redirect after payment
                 metadata: {
                     courseId: courseId,
                     userId: userId
