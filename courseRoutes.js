@@ -3,14 +3,33 @@ const database = require("./connect")
 const ObjectId = require("mongodb").ObjectId
 const jwt = require("jsonwebtoken")
 require("dotenv").config({path: "./config.env"})
+
+// Helper function to create ObjectId
+function createObjectId(id) {
+    return new ObjectId(id);
+}
 const streamifier = require('streamifier');
 const multer = require('multer');
-const cloudinary = require('./cloudinaryConfig');
+const { cloudinary, uploadOptions } = require('./cloudinaryConfig');
 const mongoose = require('mongoose')
 
-// Multer setup for image file uploads
-const storage = multer.memoryStorage(); // Store image in memory temporarily
-const upload = multer({ storage: multer.memoryStorage() });
+// Multer setup for file uploads with size limits and error handling
+const storage = multer.memoryStorage();
+const upload = multer({ 
+    storage: multer.memoryStorage(),
+    limits: {
+        fileSize: 500 * 1024 * 1024, // 500MB limit
+        files: 10 // Maximum 10 files
+    },
+    fileFilter: (req, file, cb) => {
+        // Accept images and videos
+        if (file.mimetype.startsWith('image/') || file.mimetype.startsWith('video/')) {
+            cb(null, true);
+        } else {
+            cb(new Error('Only image and video files are allowed!'), false);
+        }
+    }
+});
 let postRoutes = express.Router()
 
 // //get all
@@ -74,19 +93,22 @@ postRoutes.route("/course").post(
             // Upload the image to Cloudinary if a file is included
             if (request.files.image) {
                 console.log("Uploading image...");
-                const imageResult = await new Promise((resolve, reject) => {
-                    streamifier.createReadStream(request.files.image[0].buffer).pipe(
-                        cloudinary.uploader.upload_stream({ folder: 'learning/images' }, (error, result) => {
-                            if (error) {
-                                console.error("Image upload error:", error);
-                                return reject(error);
-                            }
-                            console.log("Image uploaded successfully:", result);
-                            resolve(result);
-                        })
+                try {
+                    const imageResult = await cloudinary.uploader.upload(
+                        `data:${request.files.image[0].mimetype};base64,${request.files.image[0].buffer.toString('base64')}`,
+                        {
+                            ...uploadOptions.image,
+                            timeout: 180000 // 3 minutes timeout
+                        }
                     );
-                });
-                imageUrl = imageResult.secure_url; // Get the uploaded image URL
+                    imageUrl = imageResult.secure_url;
+                    console.log("Image uploaded successfully:", imageResult.public_id);
+                } catch (error) {
+                    console.error("Image upload failed:", error);
+                    // Don't throw error, continue without image
+                    console.log("Continuing course creation without image");
+                    imageUrl = '';
+                }
             }
             
             // Extract chapters from the request body
@@ -99,23 +121,29 @@ postRoutes.route("/course").post(
 
 // Upload videos for each chapter if they exist
 for (let index = 0; index < chapters.length; index++) {
-    const chapter = chapters[index]; // Get the current chapter
-    const videoFileKey = `chapters[${index}][video]`; // Use index to access the correct key
+    const chapter = chapters[index];
+    const videoFileKey = `chapters[${index}][video]`;
+    
     if (request.files[videoFileKey] && request.files[videoFileKey][0]) {
-        const videoResult = await new Promise((resolve, reject) => {
-            streamifier.createReadStream(request.files[videoFileKey][0].buffer).pipe(
-                cloudinary.uploader.upload_stream({ resource_type: 'video', folder: 'learning/videos' }, (error, result) => {
-                    if (error) {
-                        console.error("Video upload error:", error);
-                        return reject(error);
-                    }
-                    resolve(result);
-                })
+        console.log(`Uploading video for chapter ${index + 1}...`);
+        try {
+            const videoResult = await cloudinary.uploader.upload(
+                `data:${request.files[videoFileKey][0].mimetype};base64,${request.files[videoFileKey][0].buffer.toString('base64')}`,
+                {
+                    ...uploadOptions.video,
+                    timeout: 300000 // 5 minutes timeout
+                }
             );
-        });
-        chapterVideos.push(videoResult.secure_url); // Add each uploaded video URL to the array
+            chapterVideos.push(videoResult.secure_url);
+            console.log(`Video uploaded successfully for chapter ${index + 1}:`, videoResult.public_id);
+        } catch (error) {
+            console.error(`Video upload failed for chapter ${index + 1}:`, error);
+            // Continue without video instead of failing entire course creation
+            chapterVideos.push(null);
+            console.log(`Continuing without video for chapter ${index + 1}`);
+        }
     } else {
-        chapterVideos.push(null); // If no video, push null
+        chapterVideos.push(null);
     }
 }
             }
@@ -408,43 +436,110 @@ postRoutes.route("/analytics/visits/:tutorId").get(verifyToken, async (req, res)
     let db = database.getDb();
     try {
         const tutorId = req.params.tutorId;
+        console.log('Fetching analytics for tutor:', tutorId);
 
         // Validate the tutorId
         if (!tutorId || !mongoose.Types.ObjectId.isValid(tutorId)) {
             return res.status(400).json({ message: 'Invalid or missing Tutor ID' });
         }
 
-        // Fetch all courseIds by this tutor
-        const courses = await db.collection("courses").find({ tutorId: new ObjectId(tutorId) }).toArray();
-        const courseIds = courses.map(course => new ObjectId(course._id));
+        // Get tutor info to find courses by author name
+        const tutor = await db.collection("users").findOne({ _id: createObjectId(tutorId) });
+        if (!tutor) {
+            return res.status(404).json({ message: 'Tutor not found' });
+        }
 
-        // Fetch the visit count for these courses
-        const visitCount = await db.collection("visits").countDocuments({
+        console.log('Found tutor:', tutor.name);
+
+        // Fetch all courses by this tutor using author field
+        const courses = await db.collection("courses").find({ 
+            author: tutor.name 
+        }).toArray();
+        
+        console.log('Found courses:', courses.length);
+        const courseIds = courses.map(course => course._id);
+
+        // Fetch the visit count for these courses from course_visits collection
+        const visitCount = await db.collection("course_visits").countDocuments({
+            courseId: { $in: courseIds.map(id => id.toString()) }
+        });
+
+        // Count enrollments for these courses
+        const totalEnrollments = await db.collection("enrollments").countDocuments({
             courseId: { $in: courseIds }
         });
 
-        // Fetch additional statistics
-        const enrolledCount = await db.collection("courses").countDocuments({
-            tutorId: new ObjectId(tutorId),
-            'enrolledUsers': { $elemMatch: { status: 'ongoing' } }
+        // Count paid enrollments (assuming courses with price > 0)
+        const paidCourses = courses.filter(course => course.price && parseFloat(course.price) > 0);
+        const paidEnrollments = await db.collection("enrollments").countDocuments({
+            courseId: { $in: paidCourses.map(course => course._id) }
         });
 
-        const completedCount = await db.collection("courses").countDocuments({
-            tutorId: new ObjectId(tutorId),
-            'enrolledUsers': { $elemMatch: { status: 'completed' } }
+        // Count ongoing courses (published courses)
+        const ongoingCourses = courses.filter(course => course.published).length;
+
+        // Count completed courses (for simplicity, using courses with enrollments)
+        const completedCourses = courses.filter(course => {
+            return course.enrolledUsers && course.enrolledUsers.length > 0;
+        }).length;
+
+        console.log('Analytics data:', {
+            visitCount,
+            courseCount: courses.length,
+            paidEnrollments,
+            ongoing: ongoingCourses,
+            completed: completedCourses
         });
 
         // Respond with analytics data
         res.json({
-            visitCount, // Corrected visit count
-            coursesCreated: courses.length,
-            ongoing: enrolledCount,
-            completed: completedCount
+            visitCount,
+            courseCount: courses.length,
+            paidEnrollments,
+            ongoing: ongoingCourses,
+            completed: completedCourses,
+            totalEnrollments
         });
 
     } catch (error) {
         console.error("Error fetching analytics:", error);
         res.status(500).json({ message: "Error fetching analytics", error: error.message });
+    }
+});
+
+// Test route for analytics debugging
+postRoutes.route("/analytics/debug/:tutorId").get(verifyToken, async (req, res) => {
+    let db = database.getDb();
+    try {
+        const tutorId = req.params.tutorId;
+        
+        // Get tutor info
+        const tutor = await db.collection("users").findOne({ _id: createObjectId(tutorId) });
+        
+        // Get courses by author
+        const courses = await db.collection("courses").find({ author: tutor?.name }).toArray();
+        
+        // Get course visits
+        const visits = await db.collection("course_visits").find({}).toArray();
+        
+        // Get enrollments
+        const enrollments = await db.collection("enrollments").find({}).toArray();
+        
+        res.json({
+            tutor: tutor ? { name: tutor.name, email: tutor.email } : null,
+            coursesCount: courses.length,
+            courses: courses.map(c => ({ title: c.title, author: c.author, _id: c._id })),
+            visitsCount: visits.length,
+            enrollmentsCount: enrollments.length,
+            collections: {
+                users: await db.collection("users").countDocuments(),
+                courses: await db.collection("courses").countDocuments(),
+                enrollments: await db.collection("enrollments").countDocuments(),
+                course_visits: await db.collection("course_visits").countDocuments()
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
     }
 });
 

@@ -280,5 +280,133 @@ const token = jwt.sign(user, process.env.SECRET_KEY, {expiresIn:"1hr"})
    
 })
 
+// Token verification middleware
+function verifyToken(request, response, next) {
+    const bearerHeader = request.headers["authorization"];
+    if (typeof bearerHeader !== "undefined") {
+        const bearer = bearerHeader.split(' ');
+        const bearerToken = bearer[1];
+        request.token = bearerToken;
+        jwt.verify(request.token, process.env.SECRET_KEY, (error, authData) => {
+            if (error) {
+                response.sendStatus(403);
+            } else {
+                request.user = authData;
+                next();
+            }
+        });
+    } else {
+        response.sendStatus(401);
+    }
+}
+
+// Update user profile
+userRoutes.route("/user/profile/:id").put(verifyToken, async (request, response) => {
+    try {
+        let db = database.getDb();
+        const userId = request.params.id;
+        const { name, email, profileImage, currentPassword, newPassword } = request.body;
+
+        // Check if user exists and is authorized
+        const user = await db.collection("users").findOne({ _id: new ObjectId(userId) });
+        if (!user) {
+            return response.status(404).json({ message: "User not found" });
+        }
+
+        // If user is trying to update their own profile or is admin
+        if (request.user._id !== userId) {
+            return response.status(403).json({ message: "Not authorized to update this profile" });
+        }
+
+        let updateData = { name, email, profileImage };
+
+        // Handle password change if provided
+        if (newPassword) {
+            if (!currentPassword) {
+                return response.status(400).json({ message: "Current password is required to set new password" });
+            }
+
+            // Verify current password
+            const passwordMatch = await bycriptjs.compare(currentPassword, user.password);
+            if (!passwordMatch) {
+                return response.status(400).json({ message: "Current password is incorrect" });
+            }
+
+            // Hash new password
+            const hashedPassword = await bycriptjs.hash(newPassword, SALT_ROUNDS);
+            updateData.password = hashedPassword;
+        }
+
+        // Update user
+        const result = await db.collection("users").updateOne(
+            { _id: new ObjectId(userId) },
+            { $set: updateData }
+        );
+
+        if (result.modifiedCount > 0) {
+            response.json({ success: true, message: "Profile updated successfully" });
+        } else {
+            response.status(400).json({ message: "No changes made" });
+        }
+    } catch (error) {
+        console.error("Error updating profile:", error);
+        response.status(500).json({ message: "Internal server error" });
+    }
+});
+
+// Update notification preferences
+userRoutes.route("/user/notifications/:id").put(verifyToken, async (request, response) => {
+    try {
+        let db = database.getDb();
+        const userId = request.params.id;
+
+        // Check authorization
+        if (request.user._id !== userId) {
+            return response.status(403).json({ message: "Not authorized" });
+        }
+
+        const result = await db.collection("users").updateOne(
+            { _id: new ObjectId(userId) },
+            { $set: { notificationSettings: request.body } }
+        );
+
+        if (result.modifiedCount > 0) {
+            response.json({ success: true, message: "Notification preferences updated" });
+        } else {
+            response.status(400).json({ message: "No changes made" });
+        }
+    } catch (error) {
+        console.error("Error updating notifications:", error);
+        response.status(500).json({ message: "Internal server error" });
+    }
+});
+
+// Update user preferences
+userRoutes.route("/user/preferences/:id").put(verifyToken, async (request, response) => {
+    try {
+        let db = database.getDb();
+        const userId = request.params.id;
+
+        // Check authorization
+        if (request.user._id !== userId) {
+            return response.status(403).json({ message: "Not authorized" });
+        }
+
+        const result = await db.collection("users").updateOne(
+            { _id: new ObjectId(userId) },
+            { $set: { preferences: request.body } }
+        );
+
+        if (result.modifiedCount > 0) {
+            response.json({ success: true, message: "Preferences updated" });
+        } else {
+            response.status(400).json({ message: "No changes made" });
+        }
+    } catch (error) {
+        console.error("Error updating preferences:", error);
+        response.status(500).json({ message: "Internal server error" });
+    }
+});
+
 
 module.exports = userRoutes
