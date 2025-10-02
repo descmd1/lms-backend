@@ -113,7 +113,7 @@ router.post('/buycourse', verifyToken, async (req, res) => {
             {
                 email,
                 amount: amountInKobo, // Amount in kobo
-                callback_url: `http://localhost:3000/verifypayment/${courseId}`, // Update for local development
+                callback_url: `https://lms-xfl6.vercel.app/verifypayment/${courseId}`, // Update for local development
                 metadata: {
                     courseId: courseId,
                     userId: userId
