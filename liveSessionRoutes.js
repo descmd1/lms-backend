@@ -300,6 +300,74 @@ liveSessionRoutes.route("/live-session/:sessionId/end").put(verifyToken, async (
     }
 });
 
+// Get live session details
+liveSessionRoutes.route("/live-session/:sessionId").get(verifyToken, async (request, response) => {
+    try {
+        const { sessionId } = request.params;
+        const userId = request.user._id;
+        const userRole = request.user.role;
+        const db = database.getDb();
+        
+        const session = await db.collection("liveSessions").findOne({ _id: createObjectId(sessionId) });
+
+        if (!session) {
+            return response.status(404).json({ error: "Session not found" });
+        }
+
+        // Check if user has access to this session
+        if (userRole !== 'tutor') {
+            let enrollment = await db.collection("enrollments").findOne({
+                userId: createObjectId(userId),
+                courseId: session.courseId
+            });
+
+            if (!enrollment) {
+                enrollment = await db.collection("enrollments").findOne({
+                    userId: userId,
+                    courseId: session.courseId
+                });
+            }
+
+            if (!enrollment) {
+                enrollment = await db.collection("enrollments").findOne({
+                    userId: createObjectId(userId),
+                    courseId: session.courseId.toString()
+                });
+            }
+
+            if (!enrollment) {
+                enrollment = await db.collection("enrollments").findOne({
+                    userId: userId,
+                    courseId: session.courseId.toString()
+                });
+            }
+
+            if (!enrollment) {
+                return response.status(403).json({ error: "You must be enrolled in this course to view session details" });
+            }
+        }
+
+        response.json({
+            session: {
+                _id: session._id,
+                title: session.title,
+                description: session.description,
+                tutorId: session.tutorId,
+                status: session.status,
+                participantCount: session.participants.length,
+                participants: session.participants,
+                maxParticipants: session.maxParticipants,
+                scheduledDateTime: session.scheduledDateTime,
+                duration: session.duration
+            }
+        });
+
+    } catch (error) {
+        console.error("Error fetching live session details:", error);
+        response.status(500).json({ error: "Failed to fetch session details", message: error.message });
+    }
+});
+
 // Join a live session
 liveSessionRoutes.route("/live-session/:sessionId/join").post(verifyToken, async (request, response) => {
     try {
@@ -314,14 +382,54 @@ liveSessionRoutes.route("/live-session/:sessionId/join").post(verifyToken, async
         }
 
         // Check if user is enrolled in the course
-        const enrollment = await db.collection("enrollments").findOne({
+        console.log("Checking enrollment for:", {
+            userId: userId,
+            userIdType: typeof userId,
+            courseId: session.courseId,
+            courseIdType: typeof session.courseId,
+            userRole: request.user.role
+        });
+
+        // Try multiple query formats to handle both string and ObjectId storage
+        let enrollment = await db.collection("enrollments").findOne({
             userId: createObjectId(userId),
             courseId: session.courseId
         });
+        console.log("Enrollment attempt 1 (ObjectId userId, ObjectId courseId):", enrollment ? "Found" : "Not found");
+
+        // If not found with ObjectId, try with string userId (for backward compatibility)
+        if (!enrollment) {
+            enrollment = await db.collection("enrollments").findOne({
+                userId: userId,
+                courseId: session.courseId
+            });
+            console.log("Enrollment attempt 2 (string userId, ObjectId courseId):", enrollment ? "Found" : "Not found");
+        }
+
+        // Also try string courseId in case of mixed formats
+        if (!enrollment) {
+            enrollment = await db.collection("enrollments").findOne({
+                userId: createObjectId(userId),
+                courseId: session.courseId.toString()
+            });
+            console.log("Enrollment attempt 3 (ObjectId userId, string courseId):", enrollment ? "Found" : "Not found");
+        }
+
+        // Try both as strings
+        if (!enrollment) {
+            enrollment = await db.collection("enrollments").findOne({
+                userId: userId,
+                courseId: session.courseId.toString()
+            });
+            console.log("Enrollment attempt 4 (string userId, string courseId):", enrollment ? "Found" : "Not found");
+        }
 
         if (!enrollment && request.user.role !== 'tutor') {
+            console.log("No enrollment found and user is not a tutor. Rejecting access.");
             return response.status(403).json({ error: "You must be enrolled in this course to join the live session" });
         }
+
+        console.log("Access granted. Enrollment found or user is tutor.");
 
         // Check if session is live
         if (session.status !== 'live') {
@@ -544,6 +652,284 @@ liveSessionRoutes.route("/live-session/:sessionId").delete(verifyToken, async (r
     } catch (error) {
         console.error("Error deleting live session:", error);
         response.status(500).json({ error: "Failed to delete session", message: error.message });
+    }
+});
+
+// Send chat message in live session
+liveSessionRoutes.route("/live-session/:sessionId/message").post(verifyToken, async (request, response) => {
+    try {
+        const { sessionId } = request.params;
+        const { message, timestamp } = request.body;
+        const userId = request.user._id;
+        const userName = request.user.name;
+        const userRole = request.user.role;
+        const db = database.getDb();
+        
+        // Verify session exists and user is participant or tutor
+        const session = await db.collection("liveSessions").findOne({ _id: createObjectId(sessionId) });
+        if (!session) {
+            return response.status(404).json({ error: "Session not found" });
+        }
+
+        // Check if user is enrolled in the course or is the tutor
+        const enrollment = await db.collection("enrollments").findOne({
+            userId: createObjectId(userId),
+            courseId: session.courseId
+        });
+
+        if (!enrollment && userRole !== 'tutor') {
+            return response.status(403).json({ error: "You must be enrolled in this course to send messages" });
+        }
+
+        // Create message object
+        const chatMessage = {
+            sessionId: createObjectId(sessionId),
+            userId: createObjectId(userId),
+            userName: userName,
+            userRole: userRole,
+            message: message,
+            timestamp: new Date(timestamp || Date.now()),
+            createdAt: new Date()
+        };
+
+        // Store message in database
+        await db.collection("sessionMessages").insertOne(chatMessage);
+
+        console.log(`Chat message stored for session ${sessionId} from ${userName}: ${message}`);
+
+        response.json({ 
+            message: "Message sent successfully",
+            messageData: {
+                id: chatMessage._id,
+                userName: chatMessage.userName,
+                userRole: chatMessage.userRole,
+                message: chatMessage.message,
+                timestamp: chatMessage.timestamp
+            }
+        });
+
+    } catch (error) {
+        console.error("Error sending chat message:", error);
+        response.status(500).json({ error: "Failed to send message", message: error.message });
+    }
+});
+
+// Get chat messages for a live session
+liveSessionRoutes.route("/live-session/:sessionId/messages").get(verifyToken, async (request, response) => {
+    try {
+        const { sessionId } = request.params;
+        const userId = request.user._id;
+        const userRole = request.user.role;
+        const db = database.getDb();
+        
+        // Verify session exists and user is participant or tutor
+        const session = await db.collection("liveSessions").findOne({ _id: createObjectId(sessionId) });
+        if (!session) {
+            return response.status(404).json({ error: "Session not found" });
+        }
+
+        // Check if user is enrolled in the course or is the tutor
+        const enrollment = await db.collection("enrollments").findOne({
+            userId: createObjectId(userId),
+            courseId: session.courseId
+        });
+
+        if (!enrollment && userRole !== 'tutor') {
+            return response.status(403).json({ error: "You must be enrolled in this course to view messages" });
+        }
+
+        // Get messages for this session
+        const messages = await db.collection("sessionMessages")
+            .find({ sessionId: createObjectId(sessionId) })
+            .sort({ timestamp: 1 })
+            .toArray();
+
+        const formattedMessages = messages.map(msg => ({
+            id: msg._id,
+            type: 'chat-message',
+            text: msg.message,
+            userName: msg.userName,
+            userRole: msg.userRole,
+            timestamp: msg.timestamp.toISOString()
+        }));
+
+        response.json({ messages: formattedMessages });
+
+    } catch (error) {
+        console.error("Error fetching chat messages:", error);
+        response.status(500).json({ error: "Failed to fetch messages", message: error.message });
+    }
+});
+
+// Send a chat message in a live session
+liveSessionRoutes.route("/live-session/:sessionId/message").post(verifyToken, async (request, response) => {
+    try {
+        const { sessionId } = request.params;
+        const { message, timestamp } = request.body;
+        const userId = request.user._id;
+        const userName = request.user.name;
+        const userRole = request.user.role;
+        const db = database.getDb();
+        
+        // Verify session exists and user has access
+        const session = await db.collection("liveSessions").findOne({ _id: createObjectId(sessionId) });
+
+        if (!session) {
+            return response.status(404).json({ error: "Session not found" });
+        }
+
+        // Check if user is enrolled or is the tutor (same logic as join endpoint)
+        if (userRole !== 'tutor') {
+            console.log("Checking enrollment for message:", {
+                userId: userId,
+                userIdType: typeof userId,
+                courseId: session.courseId,
+                courseIdType: typeof session.courseId,
+                userRole: userRole
+            });
+
+            // Try multiple query formats to handle both string and ObjectId storage
+            let enrollment = await db.collection("enrollments").findOne({
+                userId: createObjectId(userId),
+                courseId: session.courseId
+            });
+            console.log("Message enrollment attempt 1 (ObjectId userId, ObjectId courseId):", enrollment ? "Found" : "Not found");
+
+            // If not found with ObjectId, try with string userId (for backward compatibility)
+            if (!enrollment) {
+                enrollment = await db.collection("enrollments").findOne({
+                    userId: userId,
+                    courseId: session.courseId
+                });
+                console.log("Message enrollment attempt 2 (string userId, ObjectId courseId):", enrollment ? "Found" : "Not found");
+            }
+
+            // Also try string courseId in case of mixed formats
+            if (!enrollment) {
+                enrollment = await db.collection("enrollments").findOne({
+                    userId: createObjectId(userId),
+                    courseId: session.courseId.toString()
+                });
+                console.log("Message enrollment attempt 3 (ObjectId userId, string courseId):", enrollment ? "Found" : "Not found");
+            }
+
+            // Try both as strings
+            if (!enrollment) {
+                enrollment = await db.collection("enrollments").findOne({
+                    userId: userId,
+                    courseId: session.courseId.toString()
+                });
+                console.log("Message enrollment attempt 4 (string userId, string courseId):", enrollment ? "Found" : "Not found");
+            }
+
+            if (!enrollment) {
+                console.log("No enrollment found for messaging. Rejecting access.");
+                return response.status(403).json({ error: "You must be enrolled in this course to send messages" });
+            }
+
+            console.log("Message access granted. Enrollment found.");
+        }
+
+        // Create chat message object
+        const chatMessage = {
+            sessionId: createObjectId(sessionId),
+            userId: createObjectId(userId),
+            userName: userName,
+            userRole: userRole,
+            message: message,
+            timestamp: new Date(timestamp || new Date()),
+            createdAt: new Date()
+        };
+
+        // Store message in database
+        console.log('Storing chat message:', chatMessage);
+        const result = await db.collection("chatMessages").insertOne(chatMessage);
+        console.log('Message stored with ID:', result.insertedId);
+        
+        // Return the created message
+        response.json({
+            message: "Message sent successfully",
+            chatMessage: {
+                ...chatMessage,
+                _id: result.insertedId
+            }
+        });
+
+    } catch (error) {
+        console.error("Error sending chat message:", error);
+        response.status(500).json({ error: "Failed to send message", message: error.message });
+    }
+});
+
+// Get chat messages for a live session
+liveSessionRoutes.route("/live-session/:sessionId/messages").get(verifyToken, async (request, response) => {
+    try {
+        const { sessionId } = request.params;
+        const userId = request.user._id;
+        const userRole = request.user.role;
+        const db = database.getDb();
+        
+        // Verify session exists and user has access
+        const session = await db.collection("liveSessions").findOne({ _id: createObjectId(sessionId) });
+
+        if (!session) {
+            return response.status(404).json({ error: "Session not found" });
+        }
+
+        // Check if user is enrolled or is the tutor (same logic as join endpoint)
+        if (userRole !== 'tutor') {
+            // Try multiple query formats to handle both string and ObjectId storage
+            let enrollment = await db.collection("enrollments").findOne({
+                userId: createObjectId(userId),
+                courseId: session.courseId
+            });
+
+            // If not found with ObjectId, try with string userId (for backward compatibility)
+            if (!enrollment) {
+                enrollment = await db.collection("enrollments").findOne({
+                    userId: userId,
+                    courseId: session.courseId
+                });
+            }
+
+            // Also try string courseId in case of mixed formats
+            if (!enrollment) {
+                enrollment = await db.collection("enrollments").findOne({
+                    userId: createObjectId(userId),
+                    courseId: session.courseId.toString()
+                });
+            }
+
+            // Try both as strings
+            if (!enrollment) {
+                enrollment = await db.collection("enrollments").findOne({
+                    userId: userId,
+                    courseId: session.courseId.toString()
+                });
+            }
+
+            if (!enrollment) {
+                return response.status(403).json({ error: "You must be enrolled in this course to view messages" });
+            }
+        }
+
+        // Get chat messages for this session
+        const messages = await db.collection("chatMessages")
+            .find({ sessionId: createObjectId(sessionId) })
+            .sort({ timestamp: 1 })
+            .toArray();
+        
+        console.log(`Found ${messages.length} messages for session ${sessionId}`);
+        console.log('Messages:', messages);
+        
+        response.json({
+            messages: messages,
+            count: messages.length
+        });
+
+    } catch (error) {
+        console.error("Error fetching chat messages:", error);
+        response.status(500).json({ error: "Failed to fetch messages", message: error.message });
     }
 });
 

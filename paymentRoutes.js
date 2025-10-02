@@ -187,8 +187,8 @@ router.get('/verifypayment/:reference', async (req, res) => {
             //     return res.status(400).json({ error: 'User is already enrolled in this course' });
             // }
             const enrollmentObject = {
-                userId: userId,
-                courseId: courseId,
+                userId: new ObjectId(userId),
+                courseId: new ObjectId(courseId),
                 dateEnrolled: new Date(),
                 paymentReference: reference, // Store the Paystack payment reference
                 status: 'active' // Enrollment status
