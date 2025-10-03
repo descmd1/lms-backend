@@ -108,12 +108,20 @@ router.post('/buycourse', verifyToken, async (req, res) => {
         console.log('Payment details:', { email, amount, amountInKobo, courseId, userId });
         
         // Initialize payment with Paystack
+        const baseUrl = process.env.FRONTEND_URL || 'https://lms-xfl6.vercel.app';
+        const callbackUrl = `${baseUrl}/verifypayment/${courseId}`;
+        
+        console.log('Environment check:');
+        console.log('- NODE_ENV:', process.env.NODE_ENV);
+        console.log('- FRONTEND_URL from env:', process.env.FRONTEND_URL);
+        console.log('- Final callback URL:', callbackUrl);
+        
         const paymentInitResponse = await axios.post(
             'https://api.paystack.co/transaction/initialize',
             {
                 email,
                 amount: amountInKobo, // Amount in kobo
-                callback_url: `https://lms-xfl6.vercel.app/verifypayment/${courseId}`, // Update for local development
+                callback_url: callbackUrl,
                 metadata: {
                     courseId: courseId,
                     userId: userId
